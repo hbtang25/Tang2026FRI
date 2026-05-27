@@ -32,6 +32,8 @@ library(WGCNA)
 library(igraph)
 library(dplyr)
 library(Hmisc)
+library(SpiecEasi)
+library(magrittr)
 
 ```
 
@@ -47,10 +49,6 @@ cp ../fun_f/result/metadata.tsv metadata_fun.tsv
 
 ## SpiecEasi_bac
 ```{r}
-library(SpiecEasi)
-library(igraph)
-library(magrittr)
-
 otutab = read.table("otutab_bac.txt", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F)
 design = read.table("metadata_bac.tsv", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F) 
 design$group=design[,"Stage"]
@@ -207,10 +205,6 @@ for(i in 1:3){
 
 ## SpiecEasi_fun
 ```{r}
-library(SpiecEasi)
-library(igraph)
-library(magrittr)
-
 otutab = read.table("otutab_fun.txt", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F)
 design = read.table("metadata_fun.tsv", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F) 
 design$group=design[,"Stage"]
