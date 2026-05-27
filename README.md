@@ -4,9 +4,9 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 This repository hosts the standardized, reproducible computational workflow and specialized scripts developed for the manuscript: 
-> **"Deciphering the correlation between functional microbiota and flavor metabolite formation in Cantonese soy sauce via microbiome analysis"** (Submitted to *Food Research International*).
+> **"Unraveling the core microbial succession during the moromi fermentation of Cantonese soy sauce: An amplicon sequencing approach"** (Submitted to *Food Research International*).
 
-The primary objective of this toolkit is to move beyond conventional descriptive sequencing surveys by providing an integrated, mathematically rigorous framework to quantify microbial succession, infer sparse ecological networks, and model microbial-flavor interactions under high-salinity fermentation stress.
+The primary objective of this toolkit is to move beyond conventional descriptive sequencing surveys by providing an integrated, mathematically rigorous framework to quantify microbial succession, infer sparse ecological networks, and model microbial-physicochemical parameters interactions under high-salinity fermentation stress.
 
 ---
 
@@ -16,30 +16,30 @@ Compared to traditional food microbiology monitoring workflows, this pipeline in
 
 * **Compositionality Correction**: High-throughput amplicon data are inherently compositional. To address compositionality concerns and avoid spurious correlations, we implemented the **SPIEC-EASI** framework for microbial co-occurrence networks instead of traditional Pearson/Spearman coefficients.
 * **Data Standardization**: Sample library sizes are normalized using **Total Sum Scaling (TSS)** (rescaling counts to $1 \times 10^6$) followed by **Hellinger transformation** to stabilize variance before multivariate analyses.
-* **Predictive Modeling**: Incorporates **Random Forest (RF)** regression and **Redundancy Analysis (RDA)** with permutation tests (999 permutations) to establish statistical associations between key indicator taxa (biomarkers) and volatile organic compounds (VOCs).
+* **Predictive Modeling**: Incorporates **Random Forest (RF)** regression and **Redundancy Analysis (RDA)** with permutation tests (999 permutations) to establish statistical associations between key indicator taxa (biomarkers) and the measured physicochemical parameters.
 
 ---
 
 ## 📂 Repository Structure
 
 ```text
-├── README.md               # Project documentation and reproduction guide
-├── 16S_moromi.sh                 # Complete shell script containing the 16S workflow
-├── ITS_moromi.sh                 # Complete shell script containing the ITS workflow
+├── README.md                   # Project documentation and reproduction guide
+├── 16S_moromi.sh               # Complete shell script containing the 16S workflow
+├── ITS_moromi.sh               # Complete shell script containing the ITS workflow
 ├── network.Rmd                 # SPIEC-EASI network inference and topological analysis
-├── rf_classification.Rmd                 # Machine learning predictive modeling for microbial feature
-├── scripts/                         # Other auxiliary scripts
+├── rf_classification.Rmd       # Machine learning predictive modeling for microbial feature
+├── scripts/                    # Other auxiliary scripts
 └── data/
-    ├── otutab_bac.txt    # ASV abundance matrix for bacteria
-    ├── otutab_fun.txt    # ASV abundance matrix for fungi
-    ├── taxonomy_bac.txt    # taxonomy for bacterial ASV
-    ├── taxonomy_fun.txt    # taxonomy for fungal ASV
-    ├── metadata_bac.tsv     # Sample metadata (Fermentation stages: BFS1-BFS3)
-    ├── metadata_fun.tsv     # Sample metadata (Fermentation stages: FFS1-FFS3)
+    ├── otutab_bac.txt          # ASV abundance matrix for bacteria
+    ├── otutab_fun.txt          # ASV abundance matrix for fungi
+    ├── taxonomy_bac.txt        # taxonomy for bacterial ASV
+    ├── taxonomy_fun.txt        # taxonomy for fungal ASV
+    ├── metadata_bac.tsv        # Sample metadata (Fermentation stages: BFS1-BFS3)
+    ├── metadata_fun.tsv        # Sample metadata (Fermentation stages: FFS1-FFS3)
 ```
 
 <details>
-<summary>🛠️ 点击展开查看开发环境与 R 包版本 (sessionInfo)</summary>
+<summary>🛠️ Click to expand and view the development environment and R package version (sessionInfo)</summary>
 
 ```R
 R version 4.0.3 
