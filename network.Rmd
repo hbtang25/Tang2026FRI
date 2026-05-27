@@ -1,0 +1,475 @@
+---
+title: "Network Diagram"
+author: "HongBiao Tang"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F,
+                      collapse = TRUE,
+                      comment = "#>", 
+                      fig.show='asis', fig.width = 10, fig.height = 10,
+                      fig.align="center"
+                      )
+```
+
+
+# Install the R package
+
+```{r}
+if (!requireNamespace("psych", quietly=TRUE))
+    install.packages("psych")
+if (!requireNamespace("reshape2", quietly=TRUE))
+    install.packages("reshape2")
+
+library(psych)
+library(reshape2)
+library(WGCNA)
+library(igraph)
+library(dplyr)
+library(Hmisc)
+
+```
+
+
+# Copy the data table
+```{bash}
+cp ../bac_f/result/07_tax/sum_g.txt sum_g_bac.txt
+cp ../fun_f/result/07_tax/sum_g.txt sum_g_fun.txt
+cp ../bac_f/result/metadata.tsv metadata_bac.tsv
+cp ../fun_f/result/metadata.tsv metadata_fun.tsv
+```
+
+
+## SpiecEasi_bac
+```{r}
+library(SpiecEasi)
+library(igraph)
+library(magrittr)
+
+otutab = read.table("otutab_bac.txt", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F)
+design = read.table("metadata_bac.tsv", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F) 
+design$group=design[,"Stage"]
+norm = t(otutab)
+merge=cbind(norm, design[,c("group"),drop=F])
+
+otutab_BFS1 <-as.data.frame(t(as.data.frame(merge[merge$group=="BFS1",]))[-grep("group",colnames(merge)),])
+otutab_BFS1[,1:12] <- lapply(otutab_BFS1[,1:12],as.integer)
+otutab_BFS1 <- otutab_BFS1[,1:12]
+keep_BFS1 <- rowSums(otutab_BFS1 > 0) > (ncol(otutab_BFS1) * 0.5)
+otutab_filtered_BFS1 <- otutab_BFS1[keep_BFS1, ]
+
+
+otutab_BFS2 <-as.data.frame(t(as.data.frame(merge[merge$group=="BFS2",]))[-grep("group",colnames(merge)),])
+otutab_BFS2[,1:24] <- lapply(otutab_BFS2[,1:24],as.integer)
+otutab_BFS2 <- otutab_BFS2[,1:24]
+keep_BFS2 <- rowSums(otutab_BFS2 > 0) > (ncol(otutab_BFS2) * 0.5)
+otutab_filtered_BFS2 <- otutab_BFS2[keep_BFS2, ]
+
+otutab_BFS3 <-as.data.frame(t(as.data.frame(merge[merge$group=="BFS3",]))[-grep("group",colnames(merge)),])
+otutab_BFS3[,1:48] <- lapply(otutab_BFS3[,1:48],as.integer)
+otutab_BFS3 <- otutab_BFS3[,1:48]
+keep_BFS3 <- rowSums(otutab_BFS3 > 0) > (ncol(otutab_BFS3) * 0.5)
+otutab_filtered_BFS3 <- otutab_BFS3[keep_BFS3, ]
+
+split_otu_bac <- list(BFS1=as.data.frame(otutab_filtered_BFS1),
+                      BFS2=as.data.frame(otutab_filtered_BFS2),
+                      BFS3=as.data.frame(otutab_filtered_BFS3))
+
+col_g <- "#C1C1C1"
+cols <- c("#DEB99B" ,"#5ECC6D", "#5DAFD9", "#7ED1E4", "#EA9527", "#F16E1D" ,"#6E4821", "#A4B423",
+          "#C094DF" ,"#DC95D8" ,"#326530", "#50C0C9", "#67C021" ,"#DC69AF", "#8C384F", "#30455C", "#F96C72","#5ED2BF")
+
+
+n_cores <- 48
+igraph <- lapply(names(split_otu_bac), function(grp_name){
+    print(paste("Running SPIEC-EASI for group:", grp_name))
+    x <- split_otu_bac[[grp_name]]
+    
+    se.out <- spiec.easi(t(x), 
+                         method = 'mb', 
+                         lambda.min.ratio = 1e-2,
+                         nlambda = 50, 
+                         pulsar.params = list(
+                             rep.num = 100,
+                             ncores = n_cores,
+                             thresh = 0.05
+                         ))    
+    adj_mat <- getRefit(se.out)
+    beta_mat <- as.matrix(getOptBeta(se.out))
+    
+    rownames(adj_mat) <- colnames(adj_mat) <- rownames(x)
+    rownames(beta_mat) <- colnames(beta_mat) <- rownames(x)
+    
+    ig <- adj2igraph(adj_mat, vertex.attr=list(name=rownames(x)))
+    
+    ig <- simplify(ig)
+
+    edges <- as_edgelist(ig)
+    if(nrow(edges) > 0) {
+        E(ig)$weight <- apply(edges, 1, function(e) beta_mat[e[1], e[2]])
+    }
+
+
+    edge_abs_weights <- abs(E(ig)$weight)
+    
+    threshold <- 0.22
+    edges_to_remove <- E(ig)[edge_abs_weights < threshold]
+    ig <- delete_edges(ig, edges_to_remove)
+
+    ig <- delete.vertices(ig, which(degree(ig)==0))
+
+})
+names(igraph) <- names(split_otu_bac)
+save(igraph, file = 'network_bac_spiecEasi_revised.rda')
+# load('network_bac_spiecEasi.rda')
+
+pdf("network_bac_SpiecEasi.pdf", width=15, height=9)
+par(mfrow=c(1,3), mar=c(0,0,1,0), font.main=4)
+for(i in 1:3){
+  g1 <- igraph[[i]]
+  
+  E(g1)$correlation <- E(g1)$weight 
+  E(g1)$weight <- abs(E(g1)$weight)
+  
+  set.seed(007)
+  V(g1)$modularity <- membership(cluster_fast_greedy(g1))
+  V(g1)$label <- V(g1)$name
+  V(g1)$label <- NA
+  
+  modu_sort <- V(g1)$modularity %>% table() %>% sort(decreasing = T)
+  top_num <- min(18, length(modu_sort)) 
+  modu_name <- names(modu_sort[1:top_num])
+  
+  modu_cols <- cols[1:length(modu_name)]
+  names(modu_cols) <- modu_name
+  
+  V(g1)$color <- V(g1)$modularity
+  V(g1)$color[!(V(g1)$color %in% modu_name)] <- col_g
+  V(g1)$color[(V(g1)$color %in% modu_name)] <- modu_cols[match(V(g1)$color[(V(g1)$color %in% modu_name)], modu_name)]
+  V(g1)$frame.color <- V(g1)$color
+
+  E(g1)$color <- col_g
+  edgelist_df <- data.frame(as_edgelist(g1))
+  for (m in modu_name){
+    col_edge <- cols[which(modu_name==m)]
+    otu_same_modu <- V(g1)$name[which(V(g1)$modularity==m)]
+    E(g1)$color[(edgelist_df$X1 %in% otu_same_modu) & (edgelist_df$X2 %in% otu_same_modu)] <- col_edge
+  }
+
+w <- abs(E(g1)$weight)
+
+w[w <= 0 | is.na(w)] <- 1e-6
+
+  sub_net_layout <- layout_with_fr(g1, niter=999, weights = w, grid = 'nogrid')
+  plot(g1, layout=sub_net_layout, edge.color = E(g1)$color, vertex.size=2)
+  title(main = paste0(names(split_otu_bac)[i], '\nNodes=', length(V(g1)$name), ', Edges=', nrow(edgelist_df)))
+}
+dev.off()
+
+for(i in 1:3){
+  if(vcount(igraph[[i]]) == 0) {
+      print(paste("Network", names(split_otu_bac)[i], "is empty."))
+      next
+  }
+  
+  curr_g <- igraph[[i]]
+  
+  num.vertices = length(V(curr_g))
+  num.edges = length(E(curr_g))
+  connectance = edge_density(curr_g, loops=FALSE)
+  average.degree = mean(degree(curr_g))
+  
+  average.path.length = mean_distance(curr_g, directed = FALSE, weights = NA)
+  
+  edge.connectivity = edge_connectivity(curr_g)
+  clustering.coefficient = transitivity(curr_g) 
+  no.clusters = count_components(curr_g) 
+  
+  centralization.betweenness = centralization.betweenness(curr_g)$centralization 
+  centralization.degree = centralization.degree(curr_g)$centralization
+  
+  a <- cbind(num.vertices, num.edges, connectance, average.degree, 
+             average.path.length, edge.connectivity, clustering.coefficient, 
+             no.clusters, centralization.betweenness, centralization.degree)
+  
+  a_df <- as.data.frame(a)
+  rownames(a_df) <- names(split_otu_bac)[i]
+  write.table(t(a_df), file=paste0("network_property_", names(split_otu_bac)[i], ".txt"), 
+              quote = F, sep = "\t", col.names = FALSE)
+}
+
+```
+
+## SpiecEasi_fun
+```{r}
+library(SpiecEasi)
+library(igraph)
+library(magrittr)
+
+otutab = read.table("otutab_fun.txt", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F)
+design = read.table("metadata_fun.tsv", header=T, row.names= 1, sep="\t", comment.char = "", stringsAsFactors = F) 
+design$group=design[,"Stage"]
+norm = t(otutab)
+merge=cbind(norm, design[,c("group"),drop=F])
+
+otutab_FFS1 <-as.data.frame(t(as.data.frame(merge[merge$group=="FFS1",]))[-grep("group",colnames(merge)),])
+otutab_FFS1[,1:12] <- lapply(otutab_FFS1[,1:12],as.integer)
+otutab_FFS1 <- otutab_FFS1[,1:12]
+keep_FFS1 <- rowSums(otutab_FFS1 > 0) > (ncol(otutab_FFS1) * 0.1)
+otutab_filtered_FFS1 <- otutab_FFS1[keep_FFS1, ]
+
+
+otutab_FFS2 <-as.data.frame(t(as.data.frame(merge[merge$group=="FFS2",]))[-grep("group",colnames(merge)),])
+otutab_FFS2[,1:24] <- lapply(otutab_FFS2[,1:24],as.integer)
+otutab_FFS2 <- otutab_FFS2[,1:24]
+keep_FFS2 <- rowSums(otutab_FFS2 > 0) > (ncol(otutab_FFS2) * 0.1)
+otutab_filtered_FFS2 <- otutab_FFS2[keep_FFS2, ]
+
+otutab_FFS3 <-as.data.frame(t(as.data.frame(merge[merge$group=="FFS3",]))[-grep("group",colnames(merge)),])
+otutab_FFS3[,1:48] <- lapply(otutab_FFS3[,1:48],as.integer)
+otutab_FFS3 <- otutab_FFS3[,1:48]
+keep_FFS3 <- rowSums(otutab_FFS3 > 0) > (ncol(otutab_FFS3) * 0.1)
+otutab_filtered_FFS3 <- otutab_FFS3[keep_FFS3, ]
+
+split_otu_fun <- list(FFS1=as.data.frame(otutab_filtered_FFS1),
+                      FFS2=as.data.frame(otutab_filtered_FFS2),
+                      FFS3=as.data.frame(otutab_filtered_FFS3))
+
+col_g <- "#C1C1C1"
+cols <- c("#DEB99B" ,"#5ECC6D", "#5DAFD9", "#7ED1E4", "#EA9527", "#F16E1D" ,"#6E4821", "#A4B423",
+          "#C094DF" ,"#DC95D8" ,"#326530", "#50C0C9", "#67C021" ,"#DC69AF", "#8C384F", "#30455C", "#F96C72","#5ED2BF")
+
+
+n_cores <- 48
+igraph <- lapply(names(split_otu_fun), function(grp_name){
+    print(paste("Running SPIEC-EASI for group:", grp_name))
+    x <- split_otu_fun[[grp_name]]
+    
+    se.out <- spiec.easi(t(x), 
+                         method = 'mb', 
+                         lambda.min.ratio = 1e-2,
+                         nlambda = 50, 
+                         pulsar.params = list(
+                             rep.num = 100,
+                             ncores = n_cores,
+                             thresh = 0.05
+                         ))    
+    adj_mat <- getRefit(se.out)
+    beta_mat <- as.matrix(getOptBeta(se.out))
+    
+    rownames(adj_mat) <- colnames(adj_mat) <- rownames(x)
+    rownames(beta_mat) <- colnames(beta_mat) <- rownames(x)
+    
+    ig <- adj2igraph(adj_mat, vertex.attr=list(name=rownames(x)))
+    
+    ig <- simplify(ig)
+
+    edges <- as_edgelist(ig)
+    if(nrow(edges) > 0) {
+        E(ig)$weight <- apply(edges, 1, function(e) beta_mat[e[1], e[2]])
+    }
+
+    edge_abs_weights <- abs(E(ig)$weight)
+    
+   threshold <- 0.1
+    edges_to_remove <- E(ig)[edge_abs_weights < threshold]
+    ig <- delete_edges(ig, edges_to_remove)
+    ig <- delete.vertices(ig, which(degree(ig)==0))
+
+})
+names(igraph) <- names(split_otu_fun)
+save(igraph, file = 'network_fun_spiecEasi_revised.rda')
+# load('network_fun_spiecEasi.rda')
+
+pdf("network_fun_SpiecEasi.pdf", width=15, height=9)
+par(mfrow=c(1,3), mar=c(0,0,1,0), font.main=4)
+for(i in 1:3){
+  g1 <- igraph[[i]]
+  
+  E(g1)$correlation <- E(g1)$weight 
+  E(g1)$weight <- abs(E(g1)$weight)
+  
+  set.seed(007)
+  V(g1)$modularity <- membership(cluster_fast_greedy(g1))
+  V(g1)$label <- V(g1)$name
+  V(g1)$label <- NA
+  
+  modu_sort <- V(g1)$modularity %>% table() %>% sort(decreasing = T)
+  top_num <- min(18, length(modu_sort)) 
+  modu_name <- names(modu_sort[1:top_num])
+  
+  modu_cols <- cols[1:length(modu_name)]
+  names(modu_cols) <- modu_name
+  
+  V(g1)$color <- V(g1)$modularity
+  V(g1)$color[!(V(g1)$color %in% modu_name)] <- col_g
+  V(g1)$color[(V(g1)$color %in% modu_name)] <- modu_cols[match(V(g1)$color[(V(g1)$color %in% modu_name)], modu_name)]
+  V(g1)$frame.color <- V(g1)$color
+
+  E(g1)$color <- col_g
+  edgelist_df <- data.frame(as_edgelist(g1))
+  for (m in modu_name){
+    col_edge <- cols[which(modu_name==m)]
+    otu_same_modu <- V(g1)$name[which(V(g1)$modularity==m)]
+    E(g1)$color[(edgelist_df$X1 %in% otu_same_modu) & (edgelist_df$X2 %in% otu_same_modu)] <- col_edge
+  }
+
+w <- abs(E(g1)$weight)
+
+w[w <= 0 | is.na(w)] <- 1e-6
+
+  sub_net_layout <- layout_with_fr(g1, niter=999, weights = w, grid = 'nogrid')
+  plot(g1, layout=sub_net_layout, edge.color = E(g1)$color, vertex.size=2)
+  title(main = paste0(names(split_otu_fun)[i], '\nNodes=', length(V(g1)$name), ', Edges=', nrow(edgelist_df)))
+}
+dev.off()
+
+for(i in 1:3){
+  if(vcount(igraph[[i]]) == 0) {
+      print(paste("Network", names(split_otu_fun)[i], "is empty."))
+      next
+  }
+  
+  curr_g <- igraph[[i]]
+  
+  num.vertices = length(V(curr_g))
+  num.edges = length(E(curr_g))
+  connectance = edge_density(curr_g, loops=FALSE)
+  average.degree = mean(degree(curr_g))
+  
+  average.path.length = mean_distance(curr_g, directed = FALSE, weights = NA)
+  
+  edge.connectivity = edge_connectivity(curr_g)
+  clustering.coefficient = transitivity(curr_g) 
+  no.clusters = count_components(curr_g) 
+  
+  centralization.betweenness = centralization.betweenness(curr_g)$centralization 
+  centralization.degree = centralization.degree(curr_g)$centralization
+  
+  a <- cbind(num.vertices, num.edges, connectance, average.degree, 
+             average.path.length, edge.connectivity, clustering.coefficient, 
+             no.clusters, centralization.betweenness, centralization.degree)
+  
+  a_df <- as.data.frame(a)
+  rownames(a_df) <- names(split_otu_fun)[i]
+  write.table(t(a_df), file=paste0("network_property_", names(split_otu_fun)[i], ".txt"), 
+              quote = F, sep = "\t", col.names = FALSE)
+}
+
+```
+
+
+
+## sum_g_bac
+```{r}
+OTU <- read.table("sum_g_bac.txt", sep="\t", header=T, row.names=1)
+OTU <- OTU[order(rowSums(OTU),decreasing = T)[1:50],]
+head(OTU)
+
+
+OTU=t(OTU)
+OTU <- subset(OTU, select = -c(Unassigned))
+
+abundance=0.1
+
+OTU <- OTU[,colSums(OTU)/sum(OTU)>=(abundance/100)]
+head(OTU)
+
+r.cutoff=0.8
+p.cutoff=0.01
+
+occor=corr.test(OTU,
+    use="pairwise",
+    method="spearman",
+    adjust="BH",
+    alpha=0.05)
+
+r_matrix=occor$r
+p_matrix=occor$p
+
+r_matrix[p_matrix>p.cutoff|abs(r_matrix)<r.cutoff]=0
+
+p_value=melt(p_matrix)
+r_value=melt(r_matrix)
+
+r_value=subset(r_value, r_value[,3]!=0)
+r_value=subset(r_value, r_value[,1]!=r_value[,2])
+
+r_value=na.omit(r_value)
+
+abs=abs(r_value$value)
+
+linktype=r_value$value
+linktype[linktype>0]=1
+linktype[linktype<0]=-1
+directed <- "undirected"
+r_value=cbind(r_value, abs, linktype, directed)
+
+names(r_value) <- c("source","target","correlation", "weight", "cor", "Type")
+names(p_value) <- c("source","target","p_value")
+
+write.csv(r_value,file="1.edge_tax_bac.csv", row.names=FALSE, quote = FALSE)
+write.csv(r_matrix, file="3.corr_matrix_tax_bac.csv", quote = FALSE)
+write.csv(p_value,file="4.p_value_tax_bac.csv", row.names=FALSE, quote = FALSE)
+```
+
+## sum_g_fun
+```{r}
+OTU <- read.table("sum_g_fun.txt", sep="\t", header=T, row.names=1)
+OTU <- OTU[order(rowSums(OTU),decreasing = T)[1:50],]
+head(OTU)
+
+
+
+OTU=t(OTU)
+OTU <- subset(OTU, select = -c(Unassigned))
+
+
+
+abundance=0.1
+
+OTU <- OTU[,colSums(OTU)/sum(OTU)>=(abundance/100)]
+
+r.cutoff=0.8
+p.cutoff=0.01
+
+occor=corr.test(OTU,
+    use="pairwise",
+    method="spearman",
+    adjust="BH",
+    alpha=0.05)
+
+r_matrix=occor$r
+p_matrix=occor$p
+
+r_matrix[p_matrix>p.cutoff|abs(r_matrix)<r.cutoff]=0
+
+p_value=melt(p_matrix)
+r_value=melt(r_matrix)
+
+r_value=subset(r_value, r_value[,3]!=0)
+r_value=subset(r_value, r_value[,1]!=r_value[,2])
+
+r_value=na.omit(r_value)
+
+abs=abs(r_value$value)
+
+linktype=r_value$value
+linktype[linktype>0]=1
+linktype[linktype<0]=-1
+directed <- "undirected"
+r_value=cbind(r_value, abs, linktype, directed)
+
+names(r_value) <- c("source","target","correlation", "weight", "cor", "Type")
+names(p_value) <- c("source","target","p_value")
+
+write.csv(r_value,file="1.edge_tax_fun.csv", row.names=FALSE, quote = FALSE)
+write.csv(r_matrix, file="3.corr_matrix_tax_fun.csv", quote = FALSE)
+write.csv(p_value,file="4.p_value_tax_fun.csv", row.names=FALSE, quote = FALSE)
+
+```

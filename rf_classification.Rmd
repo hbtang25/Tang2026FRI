@@ -1,0 +1,490 @@
+---
+title: "Random Forest Classification"
+author: "HongBiao Tang"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F,
+                      collapse = TRUE,
+                      comment = "#>", 
+                      fig.show='asis',fig.width=10, fig.height=12,
+                      fig.align="center"
+                      )
+```
+
+
+# Installing and loading R packages
+
+```{r}
+package_list <- c("randomForest","ggplot2","pheatmap")
+
+for(p in package_list){
+  if(!suppressWarnings(suppressMessages(require(p, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)))){
+    install.packages(p, repos=site)
+    suppressWarnings(suppressMessages(library(p, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)))
+  }
+}
+library(randomForest)
+library(ggplot2)
+library(pheatmap)
+library(pROC)
+library(ggsci)
+source("./scripts/stat_plot_functions.R")
+```
+
+# tax_bac_rf
+
+## Read file
+```{bash}
+cp ../bac_f/result/metadata.tsv ./metadata_bac.tsv
+cp ../bac_f/result/tax/sum_g.txt ./sum_g_bac.txt
+cp ../bac_f/result/taxonomy.tsv ./taxonomy_bac_f.tsv
+
+```
+
+```{r}
+design = read.table("metadata_bac.tsv",header = T, row.names = 1, sep = "\t")
+otu_table =read.table("sum_g_bac.txt",header = T, row.names = 1, sep = "\t")
+design_sub = subset(design, Fermenter %in% c("FF405","FF406","FF409","FF410"))
+summary(design_sub)
+idx = rownames(design_sub) %in% colnames(otu_table)
+design_sub = design_sub[idx,]
+otutab_t = as.data.frame(t(otu_table[, rownames(design_sub)]))  
+design_sub$Stage <- factor(design_sub$Stage)
+```
+
+## Random Forest Classification
+
+```{r}
+set.seed(315)
+rf = randomForest(otutab_t, design_sub$Stage, importance=TRUE, proximity=TRUE, ntree = 1000)
+print(rf)
+```
+
+## Export feature importance
+
+```{r}
+imp= as.data.frame(round(rf$importance,2))
+imp = imp[order(imp$MeanDecreaseAccuracy,decreasing = F),]
+write.table(imp, file = "genus_imp_bac.txt", sep = "\t", quote = F, row.names = T, col.names = T)
+# Add family annotation
+system("awk 'NR==FNR{a[$7]=$6} NR>FNR{print $0\"\t\"a[$1]}' taxonomy_bac.txt genus_imp_bac.txt | sed '1 s/$/Family/' > genus_imp_family_bac.txt")
+
+```
+
+
+## Cross-validation for feature selection
+
+```{r}
+n = ncol(otutab_t)-1
+myotutab_t= otutab_t[1:n]
+set.seed(315)
+result= rfcv(myotutab_t, design_sub$Stage, cv.fold=5, scale = "log", step = 0.9)
+
+with(result, plot(n.var, error.cv, log="x", type="o", lwd=2))
+result1 = result
+
+error.cv = data.frame(num = result$n.var, error.1 =  result$error.cv)
+for (i in 316:(315+4)){
+  print(i)
+  set.seed(i)
+  result= rfcv(myotutab_t, design_sub$Stage, cv.fold=5, scale = "log", step = 0.9)
+  error.cv = cbind(error.cv, result$error.cv)
+}
+```
+
+```{r cv_ggplot2, echo=TRUE}
+
+n.var = error.cv$num
+error.cv = error.cv[,2:6]
+colnames(error.cv) = paste('err',1:5,sep='.')
+err.mean = apply(error.cv,1,mean)
+allerr = data.frame(num=n.var,err.mean=err.mean,error.cv)
+```
+
+```{r}
+# number of features selected
+optimal = 21
+
+write.table(allerr, file = "genus_rfcv_bac.txt", sep = "\t", quote = F, row.names = T, col.names = T)
+
+p = ggplot() + 
+  geom_line(aes(x = allerr$num, y = allerr$err.1), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.2), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.3), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.4), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.5), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.mean), colour = 'black') + 
+  geom_vline(xintercept = optimal, colour='black', lwd=0.36, linetype="dashed") + 
+  coord_trans(x = "log2") +
+  scale_x_continuous(breaks = c(2, 10, 20, 30, 50, 100, 150, 200)) +
+  labs(title=paste('Training set (n = ', dim(otutab_t)[1],')', sep = ''), 
+       x='Number of genus ', y='Cross-validation error rate') + 
+  annotate("text", x = optimal, y = max(allerr$err.mean), label=paste("optimal = ", optimal, sep="")) + 
+  coord_flip() +
+  main_theme 
+ggsave(p, file = "genus_rfcv_bac.pdf", width = 80, height = 89, unit = 'mm')
+p
+```
+
+## Features barplot with taxonomy in Family
+
+```{r feature_imp, echo=TRUE}
+imp = read.table("genus_imp_family_bac.txt", header=T, row.names= 1, sep="\t") 
+imp = tail(imp, n = 8)
+imp$Genus = factor(rownames(imp), levels = rownames(imp))
+
+p = ggplot(imp, aes(x = Genus, y = MeanDecreaseAccuracy, fill = Family)) + 
+  geom_bar(stat = "identity") + 
+  coord_flip() + main_theme
+ggsave(paste("genus_top_feautre_bac",".pdf", sep=""), p, width=89 * 1.5, height=50 * 1.5, unit='mm')
+p
+```
+
+## ROC
+```{r}
+prob_mat <- rf$votes
+actual_label <- design_sub$Stage
+classes <- levels(actual_label)
+
+roc_list <- list()
+for (class_name in classes) {
+  roc_list[[class_name]] <- roc(actual_label == class_name, 
+                                prob_mat[, class_name], 
+                                quiet = TRUE)
+}
+
+p <- ggroc(roc_list, legacy.axes = TRUE, size = 1) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") + 
+  
+  scale_color_npg(name = "Stages", 
+                  labels = paste(names(roc_list), " (AUC = ", 
+                                 sapply(roc_list, function(x) sprintf("%.3f", auc(x))), ")", sep="")) +
+  
+  labs(x = "1 - Specificity (False Positive Rate)",
+       y = "Sensitivity (True Positive Rate)",
+       title = "ROC Curves for Random Forest Classification") +
+  
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(size = 12, face = "bold", color = "black"),
+    axis.text = element_text(size = 10, color = "black"),
+    legend.title = element_text(size = 11, face = "bold"),
+    legend.text = element_text(size = 9),
+    legend.position = c(0.75, 0.25),
+    legend.background = element_rect(fill = alpha("white", 0.5)),
+    aspect.ratio = 1
+  )
+
+print(p)
+ggsave("ROC_Curves_FRI_Submission_bac.pdf", p, width = 6, height = 5.5, units = "in", dpi = 600)
+```
+
+## Independent verification
+```{r}
+design_test = subset(design, Fermenter %in% c("FF400","FF399")) 
+summary(design_test)
+idx = rownames(design_test) %in% colnames(otu_table)
+design_test = design_test[idx,]
+otu_sub = otu_table[,rownames(design_test)]
+
+otutab_t = as.data.frame(t(otu_sub))
+otutab_t$Stage = design[rownames(otutab_t),]$Stage
+```
+
+
+## Validation of the Random Forest model based on the training set
+```{r}
+set.seed(315)
+otutab.pred = predict(rf, t(otu_sub) )  
+pre_tab = table(observed=otutab_t[,"Stage"],
+                predicted=otutab.pred) 
+pre_tab
+```
+
+## Visualise the verification results
+
+```{r}
+predict = data.frame(group = otutab_t[,"Stage"], predicted=otutab.pred)
+
+write.table("SampleID\t", file=paste("RF_prediction_binary_bac.txt",sep=""),append = F, quote = F, eol = "", row.names = F, col.names = F)
+write.table(predict, file = "RF_prediction_binary_bac.txt",append = T, quote = F, row.names = T, col.names = T, sep = "\t")
+
+predict$result = ifelse(predict$group == predict$predicted, 1, 0)
+predict$predict = ifelse(predict$predicted == "Cancer", 1, 2)
+predict$predict[predict$predicted=="BFS1"]=1
+predict$predict[predict$predicted=="BFS2"]=2
+predict$predict[predict$predicted=="BFS3"]=3
+# Set sample number in each row
+column = 5
+
+BFS1 = predict[predict$group=="BFS1",]$predict
+length(BFS1)
+row = round(length(BFS1)/column + 0.5)
+i = column * row - length(BFS1)
+BFS1 = c(BFS1, rep(NA, i))
+matrix = matrix(BFS1, nrow = row, ncol = column, byrow = T)
+pheatmap(matrix, color = c("#F8766D", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60)
+pheatmap(matrix, color = c("#F8766D", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60,filename = "genus_test_BFS1.pdf",width = 15, height = 12)
+
+# Draw BFS2 prediction result
+column = 9
+
+BFS2 = predict[predict$group=="BFS2",]$predict
+length(BFS2)
+row = round(length(BFS2)/column + 0.5)
+i = column * row - length(BFS2)
+BFS2 = c(BFS2, rep(NA, i))
+matrix = matrix(BFS2, nrow = row, ncol = column, byrow = T)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60,
+         filename = "genus_test_BFS2.pdf",width = 15, height = 12)
+
+# Draw BFS3 prediction result
+column = 8
+
+BFS3 = predict[predict$group=="BFS3",]$predict
+length(BFS3)
+row = round(length(BFS3)/column + 0.5)
+i = column * row - length(BFS3)
+BFS3 = c(BFS3, rep(NA, i))
+matrix = matrix(BFS3, nrow = row, ncol = column, byrow = T)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60,
+         filename = "genus_test_BFS3.pdf",width = 15, height = 12)
+```
+
+
+
+
+
+# tax_fun_rf
+## Read file
+
+```{bash}
+cp ../fun_f/result/metadata.tsv ./metadata_fun.tsv
+cp ../fun_f/result/tax/sum_g.txt ./sum_g_fun.txt
+cp ../fun_f/result/taxonomy.tsv ./taxonomy_fun.tsv
+
+```
+
+```{r}
+design = read.table("metadata_fun.tsv",header = T, row.names = 1, sep = "\t")
+otu_table =read.table("sum_g_fun.txt",header = T, row.names = 1, sep = "\t")
+design_sub = subset(design, Fermenter %in% c("FF405","FF406","FF409","FF410"))
+summary(design_sub)
+idx = rownames(design_sub) %in% colnames(otu_table)
+design_sub = design_sub[idx,]
+otutab_t = as.data.frame(t(otu_table[, rownames(design_sub)]))  
+design_sub$Stage <- factor(design_sub$Stage)
+```
+
+## Random Forest Classification
+```{r}
+set.seed(315)
+rf = randomForest(otutab_t, design_sub$Stage, importance=TRUE, proximity=TRUE, ntree = 1000)
+print(rf)
+```
+
+## Export feature importance
+```{r}
+imp= as.data.frame(round(rf$importance,2))
+imp = imp[order(imp$MeanDecreaseAccuracy,decreasing = F),]
+write.table(imp, file = "genus_imp_fun.txt", sep = "\t", quote = F, row.names = T, col.names = T)
+# Add family annotation
+system("awk 'NR==FNR{a[$7]=$6} NR>FNR{print $0\"\t\"a[$1]}' taxonomy_fun.txt genus_imp_fun.txt | sed '1 s/$/Family/' > genus_imp_family_fun.txt")
+
+```
+
+
+## Cross-validation for feature selection
+```{r}
+n = ncol(otutab_t)-1
+myotutab_t= otutab_t[1:n]
+set.seed(315)
+result= rfcv(myotutab_t, design_sub$Stage, cv.fold=5, scale = "log", step = 0.9)
+with(result, plot(n.var, error.cv, log="x", type="o", lwd=2))
+result1 = result
+
+error.cv = data.frame(num = result$n.var, error.1 =  result$error.cv)
+for (i in 316:(315+4)){
+  print(i)
+  set.seed(i)
+  result= rfcv(myotutab_t, design_sub$Stage, cv.fold=5, scale = "log", step = 0.9)
+  error.cv = cbind(error.cv, result$error.cv)
+}
+```
+
+```{r cv_ggplot2, echo=TRUE}
+
+n.var = error.cv$num
+error.cv = error.cv[,2:6]
+colnames(error.cv) = paste('err',1:5,sep='.')
+err.mean = apply(error.cv,1,mean)
+allerr = data.frame(num=n.var,err.mean=err.mean,error.cv)
+```
+
+
+```{r}
+# number of features selected
+optimal = 3
+
+write.table(allerr, file = "genus_rfcv_fun.txt", sep = "\t", quote = F, row.names = T, col.names = T)
+
+p = ggplot() + 
+  geom_line(aes(x = allerr$num, y = allerr$err.1), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.2), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.3), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.4), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.5), colour = 'grey') + 
+  geom_line(aes(x = allerr$num, y = allerr$err.mean), colour = 'black') + 
+  geom_vline(xintercept = optimal, colour='black', lwd=0.36, linetype="dashed") + 
+  coord_trans(x = "log2") +
+  scale_x_continuous(breaks = c(3, 10, 20, 30, 50, 80, 100, 150, 200)) + 
+  labs(title=paste('Training set (n = ', dim(otutab_t)[1],')', sep = ''), 
+       x='Number of genus ', y='Cross-validation error rate') + 
+  annotate("text", x = optimal, y = max(allerr$err.mean), label=paste("optimal = ", optimal, sep="")) + 
+  coord_flip() +
+  main_theme 
+ggsave(p, file = "genus_rfcv_fun.pdf", width = 80, height = 89, unit = 'mm')
+p
+```
+
+## Features barplot with taxonomy in Family
+```{r feature_imp, echo=TRUE}
+imp = read.table("genus_imp_family_fun.txt", header=T, row.names= 1, sep="\t") 
+imp = tail(imp, n = optimal)
+imp$Genus = factor(rownames(imp), levels = rownames(imp))
+
+p = ggplot(imp, aes(x = Genus, y = MeanDecreaseAccuracy, fill = Family)) + 
+  geom_bar(stat = "identity") + 
+  coord_flip() + main_theme
+ggsave(paste("genus_top_feautre_fun",".pdf", sep=""), p, width=89 * 1.5, height=50 * 1.5, unit='mm')
+p
+```
+
+
+## ROC
+```{r}
+prob_mat <- rf$votes
+actual_label <- design_sub$Stage
+classes <- levels(actual_label)
+
+roc_list <- list()
+for (class_name in classes) {
+  roc_list[[class_name]] <- roc(actual_label == class_name, 
+                                prob_mat[, class_name], 
+                                quiet = TRUE)
+}
+
+p <- ggroc(roc_list, legacy.axes = TRUE, size = 1) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") + 
+  
+  scale_color_npg(name = "Stages", 
+                  labels = paste(names(roc_list), " (AUC = ", 
+                                 sapply(roc_list, function(x) sprintf("%.3f", auc(x))), ")", sep="")) +
+  
+  labs(x = "1 - Specificity (False Positive Rate)",
+       y = "Sensitivity (True Positive Rate)",
+       title = "ROC Curves for Random Forest Classification") +
+  
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(size = 12, face = "bold", color = "black"),
+    axis.text = element_text(size = 10, color = "black"),
+    legend.title = element_text(size = 11, face = "bold"),
+    legend.text = element_text(size = 9),
+    legend.position = c(0.75, 0.25),
+    legend.background = element_rect(fill = alpha("white", 0.5)),
+    aspect.ratio = 1
+  )
+
+print(p)
+ggsave("ROC_Curves_FRI_Submission_fun.pdf", p, width = 6, height = 5.5, units = "in", dpi = 600)
+```
+
+
+## Independent verification
+```{r}
+design_test = subset(design, Fermenter %in% c("FF400","FF399")) 
+summary(design_test)
+idx = rownames(design_test) %in% colnames(otu_table)
+design_test = design_test[idx,]
+otu_sub = otu_table[,rownames(design_test)]
+
+otutab_t = as.data.frame(t(otu_sub))
+otutab_t$Stage = design[rownames(otutab_t),]$Stage
+```
+
+
+## Validation of the Random Forest model based on the training set
+```{r}
+set.seed(315)
+otutab.pred = predict(rf, t(otu_sub) )  
+pre_tab = table(observed=otutab_t[,"Stage"],
+                predicted=otutab.pred) 
+pre_tab
+```
+
+## Visualise the verification results
+
+```{r}
+predict = data.frame(group = otutab_t[,"Stage"], predicted=otutab.pred)
+
+write.table("SampleID\t", file=paste("RF_prediction_binary_fun.txt",sep=""),append = F, quote = F, eol = "", row.names = F, col.names = F)
+write.table(predict, file = "RF_prediction_binary_fun.txt",append = T, quote = F, row.names = T, col.names = T, sep = "\t")
+
+predict$result = ifelse(predict$group == predict$predicted, 1, 0)
+predict$predict = ifelse(predict$predicted == "Cancer", 1, 2)
+predict$predict[predict$predicted=="FFS1"]=1
+predict$predict[predict$predicted=="FFS2"]=2
+predict$predict[predict$predicted=="FFS3"]=3
+# Set sample number in each row
+column = 5
+
+FFS1 = predict[predict$group=="FFS1",]$predict
+length(FFS1)
+row = round(length(FFS1)/column + 0.5)
+i = column * row - length(FFS1)
+FFS1 = c(FFS1, rep(NA, i))
+matrix = matrix(FFS1, nrow = row, ncol = column, byrow = T)
+pheatmap(matrix, color = c("#F8766D", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60)
+pheatmap(matrix, color = c("#F8766D", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60,filename = "genus_test_FFS1.pdf",width = 15, height = 12)
+
+# Draw FFS2 prediction result
+column = 9
+
+FFS2 = predict[predict$group=="FFS2",]$predict
+length(FFS2)
+row = round(length(FFS2)/column + 0.5)
+i = column * row - length(FFS2)
+FFS2 = c(FFS2, rep(NA, i))
+matrix = matrix(FFS2, nrow = row, ncol = column, byrow = T)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60,
+         filename = "genus_test_FFS2.pdf",width = 15, height = 12)
+
+# Draw FFS3 prediction result
+column = 8
+
+FFS3 = predict[predict$group=="FFS3",]$predict
+length(FFS3)
+row = round(length(FFS3)/column + 0.5)
+i = column * row - length(FFS3)
+FFS3 = c(FFS3, rep(NA, i))
+matrix = matrix(FFS3, nrow = row, ncol = column, byrow = T)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60)
+pheatmap(matrix, color = c("#00BA38", "#619CFF") , cluster_rows = F, cluster_cols = F, cellwidth = 75, cellheight = 60,
+         filename = "genus_test_FFS3.pdf",width = 15, height = 12)
+```
+
+
